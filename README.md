@@ -93,6 +93,67 @@ This runs Postgres, the indexer (`indexer/`), and the frontend together — see 
 
 The Postgres port is published only on `127.0.0.1`. Compose uses `prism` as a local-development-only default for `POSTGRES_PASSWORD`; set a strong value in your environment before starting the stack if you need a different password. Do not use the default for a production deployment.
 
+### Running against a local network (stellar-quickstart)
+
+If you're building Soroban contracts, you can run Prism against a local network instead of testnet or mainnet. [stellar-quickstart](https://github.com/stellar/stellar-quickstart) spins up a complete local Stellar network (Horizon, Soroban RPC, and a friendbot) in Docker, so you can deploy and inspect contracts without touching a public network.
+
+**1. Start stellar-quickstart.**
+
+```bash
+docker run --rm -p 8000:8000 stellar/quickstart:latest \
+  --local \
+  --enable-soroban-rpc
+```
+
+This exposes:
+
+- Horizon at `http://localhost:8000`
+- Soroban RPC at `http://localhost:8000/soroban/rpc`
+- Friendbot at `http://localhost:8000/friendbot`
+
+Wait until the container logs report the network is up before continuing.
+
+**2. Point Prism at the local network.**
+
+In `frontend/.env.local`, set the RPC and Horizon URLs to the quickstart endpoints:
+
+```bash
+NEXT_PUBLIC_SOROBAN_RPC_URL=http://localhost:8000/soroban/rpc
+NEXT_PUBLIC_HORIZON_URL=http://localhost:8000
+```
+
+Then start the frontend:
+
+```bash
+cd frontend
+npm run dev
+```
+
+Prism now reads live chain state from your local network. If you're running the full stack with the indexer, point the indexer's RPC/Horizon settings at the same URLs so it indexes the local network too.
+
+**3. Deploy the showcase contract.**
+
+Fund a local account with friendbot, then build and deploy `contracts/showcase` to the local network:
+
+```bash
+# Fund a local identity
+curl "http://localhost:8000/friendbot?addr=$(stellar keys address local)"
+
+# Build and deploy the showcase contract
+cd contracts/showcase
+stellar contract build
+stellar contract deploy \
+  --wasm target/wasm32-unknown-unknown/release/showcase.wasm \
+  --source local \
+  --network local
+```
+
+See [contracts/README.md](./contracts/README.md) for the full deploy recipe and the functions the showcase contract exposes.
+
+**4. Inspect it in Prism.**
+
+Open `http://localhost:3000` and search for the contract ID printed by the deploy command. You can now browse its storage, invocation history, and emitted events against your local network.
+
 ### Rate limits and reverse proxies
 
 Every `/api/*` route is rate-limited per client: 30 requests per minute, except `/api/contract/[id]/simulate` at 10 per minute. Each route keeps its own counter, so hitting the limit on one route doesn't block the others. Over the limit, the API returns `429` with a `Retry-After` header (in seconds).
@@ -126,29 +187,4 @@ explorer.example.com {
 
 With more than one proxy, such as a CDN or load balancer in front of nginx, the outermost hop has to set the header and every inner hop has to pass it on without appending. With nginx, use `real_ip_header X-Forwarded-For` and `set_real_ip_from <upstream range>` so that `$remote_addr` becomes the original client, then set the header to it as shown above. Cloudflare provides the client address in `CF-Connecting-IP`. Behind Cloudflare, use `proxy_set_header X-Forwarded-For $http_cf_connecting_ip;`, but only if Prism's origin accepts traffic from Cloudflare alone.
 
-To check the setup, send about 35 requests in a minute to a read route from one machine, for example `curl -s -o /dev/null -w '%{http_code}\n' https://explorer.example.com/api/ledger/1`. From around the 31st request you should get `429`. A second machine should still get `200` during that time. If the second machine also gets `429`, every client is sharing one counter: the header isn't reaching Prism, or it holds the proxy's own address.
-
----
-
-## Roadmap
-
-- [x] Ledger overview with auto-refreshing updates
-- [x] Transaction explorer with Soroban decoding
-- [x] Contract storage inspector
-- [x] Contract invocation history and event log
-- [x] In-browser contract invocation tool
-- [x] XDR decoder
-- [x] Docker Compose for self-hosting
-- [x] Optional indexer for full storage enumeration and unbounded history
-- [x] Showcase contract for end-to-end verification of every explorer panel
-- [ ] Mainnet deployment at prism.network
-
----
-
-## Contributing
-
-Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to get started. Frontend, RPC integration, indexer, and Soroban contract contributions are all needed.
-
-## License
-
-MIT — see [LICENSE](./LICENSE).
+To check the setup, send about 35 requests in a minute to a read route from one machine, for example `curl -s -o /dev/null -w '%{http_code}\n' https://explorer.example.com/api/ledger/1`. From around the 31st request you should get `429`. A second machine should still get `200` during that time. If the second machine also gets `429`, every client is sharing one counter: the header isn't reaching Prism, or the proxy is appending instead of replacing.
